@@ -1,0 +1,233 @@
+---
+jupyter:
+  anaconda-cloud: {}
+  jupytext:
+    notebook_metadata_filter: all,-language_info
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.14.1
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+# Accuracy of the classifier, Alex remix
+
+This page has content from the
+[Accuracy_of_the_Classifier](https://github.com/data-8/textbook/blob/64b20f0/notebooks/Accuracy_of_the_Classifier.ipynb)
+notebook of an older version of the [UC Berkeley data science
+course](https://inferentialthinking.com/). See the Berkeley course section of
+the [license file](https://lisds.github.io/textbook/license).
+
+The point here is to implement a version of the nearest-neighbor classifier
+where we take into account how far each of the `k` nearest neighbors is, from
+the point we will classify.
+
+First we start with the code from the original "Accuracy of the Classifier"
+notebook.
+
+```{python}
+import numpy as np
+# Make random number generator.
+rng = np.random.default_rng()
+import matplotlib.pyplot as plt
+plt.style.use('fivethirtyeight')
+import pandas as pd
+pd.set_option('mode.copy_on_write', True)
+```
+
+Here are the original k-nearest-neighbor classification functions.
+
+
+```{python tags=c("hide-cell")}
+def distance(point1, point2):
+    """Returns the distance between point1 and point2
+    where each argument is an array
+    consisting of the coordinates of the point"""
+    return np.sqrt(np.sum((point1 - point2)**2))
+
+def all_distances(training, new_point):
+    """Returns an array of distances
+    between each point in the training set
+    and the new point (which is a row of attributes)"""
+    attributes = training.drop(columns='Class')
+    def distance_from_point(row):
+        return distance(np.array(new_point), np.array(row))
+    return attributes.apply(distance_from_point, axis=1)
+
+def table_with_distances(training, new_point):
+    """Augments the training table
+    with a column of distances from new_point"""
+    out = training.copy()
+    out['Distance'] = all_distances(training, new_point)
+    return out
+
+def closest(training, new_point, k):
+    """Returns a table of the k rows of the augmented table
+    corresponding to the k smallest distances"""
+    with_dists = table_with_distances(training, new_point)
+    sorted_by_distance = with_dists.sort_values('Distance')
+    topk = sorted_by_distance.iloc[:k]
+    return topk
+```
+
+The original way of deciding on the best classification was to take a majority vote from the `k` nearest neighbors, like this:
+
+```{python}
+def majority(topkclasses):
+    ones = np.count_nonzero(topkclasses == 1)
+    zeros = np.count_nonzero(topkclasses == 0)
+    if ones > zeros:
+        return 1
+    else:
+        return 0
+
+def classify(training, new_point, k):
+    closestk = closest(training, new_point, k)
+    return majority(closestk['Class'])
+```
+
+You can download the data file for this page from
+{download}`wine.csv <../data/wine.csv>`.
+
+```{python tags=c("hide-cell")}
+wine = pd.read_csv('wine.csv')
+wine.loc[wine['Class'] != 1, 'Class'] = 0
+```
+
+Let us first run the original classifier in the usual train / test cycle.
+
+First we split the data at random into training set and test set.
+
+
+```{python}
+n_wine = len(wine)
+half_n = round(n_wine / 2)
+shuffled_wine = wine.sample(n_wine, replace=False)
+training_set = shuffled_wine.iloc[:half_n]
+test_set  = shuffled_wine.iloc[half_n:]
+```
+
+Here are the functions to evaluate the accuracy of the classifier — they do the
+classification, and then count how many labels (0 or 1) were the same in the
+classification as they were in the original test data.
+
+```{python}
+def count_zero(array):
+    """Counts the number of 0's in an array"""
+    return len(array) - np.count_nonzero(array)
+
+def count_equal(array1, array2):
+    """Takes two numerical arrays of equal length
+    and counts the indices where the two are equal"""
+    return count_zero(array1 - array2)
+
+def evaluate_accuracy(training, test, k):
+    test_attributes = test.drop(columns='Class')
+    def classify_testrow(row):
+        return classify(training, row, k)
+    c = test_attributes.apply(classify_testrow, axis=1)
+    return count_equal(c, test['Class']) / len(test)
+```
+
+Here's the result for the original classifier, with `k=5`.
+
+```{python}
+evaluate_accuracy(training_set, test_set, 5)
+```
+
+Now consider what we have to do, to make a classifier that takes the weighted distance into account.
+
+Remember the original `classify` function, repeated here:
+
+
+```{python}
+def classify(training, new_point, k):
+    closestk = closest(training, new_point, k)
+    return majority(closestk['Class'])
+```
+
+Notice it's using the majority vote `majority` function, in the last line, to
+get the classification from the `k` nearest neighbors.   We need a different
+function to decide on the classification, given the `k` nearest neighbors.  It might be this:
+
+
+```{python}
+def weighted_classification(closest_k):
+    pt_distances = 1 / closest_k['Distance']
+    classes = closest_k['Class']
+    sum_wt_1 = np.sum(pt_distances[classes == 1])
+    sum_wt_0 = np.sum(pt_distances[classes == 0])
+    if sum_wt_1 > sum_wt_0:
+        return 1
+    elif sum_wt_1 == sum_wt_0:
+        # Tie breaker.  We have to decide on 0 or 1 here.
+        # Use the original majority vote in that case.
+        return majority(closest_k['Class'])
+    return 0
+```
+
+Here we apply the classification function to one set of `k` nearest neighbors. Remember (from the `closest` function above), we work on all the columns *except* the column with actual classification — in our case `Class`.  So, to make a point to test the voting function, we drop the `Class` column.
+
+
+```{python}
+new_point = test_set.iloc[41]
+point_attrs = new_point.drop('Class')
+point_attrs
+```
+
+Now we test our voting function with that point.
+
+```{python}
+weighted_classification(closest_k)
+```
+
+Try another couple of points, as a quick check
+
+```{python}
+p2_attrs = test_set.iloc[0].drop('Class'))
+```
+
+```{python}
+weighted_classification(p2_attrs)
+```
+
+```{python}
+p3_attrs = test_set.iloc[40].drop('Class'))
+```
+
+```{python}
+weighted_classification(p3_attrs)
+```
+
+OK — that looks reasonable to a very superficial first pass.
+
+
+Now let's plumb the new voting function into a `classify` function.
+
+```{python}
+def weight_classify(training, new_point, k):
+    closestk = closest(training, new_point, k)
+    # Now it's Alex's turn.  What is the class of the new point?
+    return weighted_classification(closestk)
+```
+
+Finally, we use a new version of the `evaluate_accuracy` function to see how that voting function does:
+
+```{python}
+def weight_evaluate_accuracy(training, test, k):
+    test_attributes = test.drop(columns='Class')
+    def classify_testrow(row):
+        return weight_classify(training, row, k)
+    c = test_attributes.apply(classify_testrow, axis=1)
+    return count_equal(c, test['Class']) / len(test)
+```
+
+```{python}
+weight_evaluate_accuracy(training_set, test_set, 5)
+```
+
+Nice!  A slight improvement in the classification.
